@@ -1,0 +1,9 @@
+[submodule "edk2"]
+	path = edk2
+	url = https://github.com/tianocore/edk2
+[submodule "qemu-ovmf-secureboot"]
+	path = qemu-ovmf-secureboot
+	url = https://github.com/rhuefi/qemu-ovmf-secureboot.git
+[submodule "shim"]
+	path = shim
+	url = https://github.com/rhboot/shim.git
