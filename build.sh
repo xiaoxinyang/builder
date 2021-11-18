@@ -1,7 +1,40 @@
 #!/bin/bash
+
+cat /etc/os-release | grep -q '"Ubuntu"'
+
+if [ $? -eq 0 ] ; then
+	# Ubuntu
+	KVM=/usr/bin/kvm
+	ISOLINUX_BIN=/usr/lib/ISOLINUX/isolinux.bin
+	LDLINUX_C32=/usr/lib/syslinux/modules/bios/ldlinux.c32
+	GRUB_MKIMAGE=/usr/bin/grub-mkimage
+    	GRUB_MODULES_ISO="iso9660 normal boot linux multiboot true configfile loopback chain efifwsetup efi_gop efi_uga ls cat echo ls memdisk udf linuxefi"
+    	GRUB_MODULES="fat iso9660 part_gpt part_msdos normal boot linux configfile loopback chain efifwsetup efi_gop efi_uga ls search search_label search_fs_uuid search_fs_file test all_video loadenv exfat ext2 udf linuxefi"
+	EFIKEYGEN="efikeygen"
+	ISOHDPFX_BIN=/usr/lib/ISOLINUX/isohdpfx.bin
+else
+	# CentOS
+	KVM=/usr/libexec/qemu-kvm
+	ISOLINUX_BIN=/usr/share/syslinux/isolinux.bin
+	LDLINUX_C32=/usr/share/syslinux/ldlinux.c32
+	GRUB_MKIMAGE=/usr/bin/grub2-mkimage
+    	GRUB_MODULES_ISO="iso9660 normal boot linux multiboot true configfile loopback chain efifwsetup efi_gop efi_uga ls cat echo ls memdisk udf linux"
+    	GRUB_MODULES="fat iso9660 part_gpt part_msdos normal boot linux configfile loopback chain efifwsetup efi_gop efi_uga ls search search_label search_fs_uuid search_fs_file test all_video loadenv exfat ext2 udf linux"
+	EFIKEYGEN="efikeygen --kernel"
+	ISOHDPFX_BIN=/usr/share/syslinux/isohdpfx.bin
+fi
+
+GRUB_MODDEP_LST=/usr/lib/grub/x86_64-efi/moddep.lst
+
+for f in "$ISOLINUX_BIN" "$LDLINUX_C32" "$GRUB_MKIMAGE" "$GRUB_MODDEP_LST" ; do
+	if [ ! -f "$f" ] ; then
+		echo "Missing $f" && exit 1
+	fi
+done
+
 git submodule update --init
 
-IDX=1001
+IDX=1002
 
 # Create certificates
 pushd certs
@@ -102,7 +135,7 @@ popd
 
 # Generate OVMF variables ("VARS") file with default Secure Boot keys enrolled
 rm -f OVMF_VARS.secboot.fd
-qemu-ovmf-secureboot/ovmf-vars-generator --verbose --verbose --qemu-binary /usr/bin/kvm --ovmf-binary edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_CODE.fd --ovmf-template-vars edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_VARS.fd --uefi-shell-iso edk2/UefiShell.iso --oem-string "$(< PkKek1.oemstr)" --skip-testing OVMF_VARS.secboot.fd
+qemu-ovmf-secureboot/ovmf-vars-generator --verbose --verbose --qemu-binary $KVM --ovmf-binary edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_CODE.fd --ovmf-template-vars edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_VARS.fd --uefi-shell-iso edk2/UefiShell.iso --oem-string "$(< PkKek1.oemstr)" --skip-testing OVMF_VARS.secboot.fd
 
 
 # Create Secure boot signer ca
@@ -111,13 +144,13 @@ mkdir -p ./ca/uefi_sb_ca
  
 certutil -d ./ca/uefi_sb_ca -N --empty-password
  
-efikeygen -d ./ca/uefi_sb_ca \
+$EFIKEYGEN -d ./ca/uefi_sb_ca \
   --ca --self-sign \
   --nickname='Xiaoxin UEFI SB CA' \
   --common-name="C=CA,ST=Quebec,L=Montreal,O=Xiaoxin,CN=Xiaoxin UEFI SB CA $IDX" \
   --serial=00
  
-efikeygen -d ./ca/uefi_sb_ca \
+$EFIKEYGEN -d ./ca/uefi_sb_ca \
   --signer='Xiaoxin UEFI SB CA' \
   --nickname='Xiaoxin UEFI SB Signer' \
   --common-name="C=CA,ST=Quebec,L=Montreal,O=Xiaoxin,CN=Xiaoxin UEFI SB Signer $IDX" \
@@ -153,30 +186,27 @@ popd
 rm -rf EFI
 mkdir EFI
 # for hard drive
-grub-mkimage \
+$GRUB_MKIMAGE \
     --compression=xz \
     --directory /usr/lib/grub/x86_64-efi \
     --output EFI/grubx64.efi \
     --prefix /EFI/BOOT \
     --format x86_64-efi \
-    fat iso9660 part_gpt part_msdos normal boot linux configfile loopback chain efifwsetup efi_gop \
-    efi_uga ls search search_label search_fs_uuid search_fs_file  \
-    test all_video loadenv exfat ext2 udf linuxefi
+    $GRUB_MODULES
 
 # for iso
 cat  <<EOF >> ./grub-early.cfg
 configfile (\$root)/grub.cfg
 EOF
 
-grub-mkimage \
+$GRUB_MKIMAGE \
     -c ./grub-early.cfg \
     --compression=xz \
     --directory /usr/lib/grub/x86_64-efi \
     --output EFI/iso-grubx64.efi \
     --prefix /EFI/BOOT \
     --format x86_64-efi \
-    iso9660 normal boot linux multiboot true configfile loopback chain efifwsetup efi_gop \
-    efi_uga ls cat echo ls memdisk udf linuxefi
+    $GRUB_MODULES_ISO
 
 # sign 
 pesign --force -s -n ./ca/uefi_sb_signer -c "Xiaoxin UEFI SB Signer" -i EFI/grubx64.efi -o EFI/grubx64.efi.signed
@@ -189,11 +219,8 @@ EFI_IMG="$WORK_DIR/efi.img"
 
 mkdir -p $ISOLINUX_DIR
 
-#cp /usr/share/syslinux/isolinux.bin $ISOLINUX_DIR
-#cp /usr/share/syslinux/ldlinux.c32 $ISOLINUX_DIR
-
-cp /usr/lib/ISOLINUX/isolinux.bin $ISOLINUX_DIR
-cp /usr/lib/syslinux/modules/bios/ldlinux.c32 $ISOLINUX_DIR
+cp $ISOLINUX_BIN $ISOLINUX_DIR
+cp $LDLINUX_C32 $ISOLINUX_DIR
 
 cat  << EOF > $ISOLINUX_DIR/isolinux.cfg
 SAY Linux Installer
@@ -211,11 +238,11 @@ mkfs.vfat ${EFI_IMG}
 mmd -i ${EFI_IMG} efi
 mmd -i ${EFI_IMG} efi/boot
 
-pesign --force -s -n ./ca/uefi_sb_signer -c "Xiaoxin UEFI SB Signer" -i vmlinuz.unsigned  -o $WORK_DIR/vmlinuz
+pesign --force -s -n ./ca/uefi_sb_signer -c "Xiaoxin UEFI SB Signer" -i smi/vmlinuz.unsigned  -o $WORK_DIR/vmlinuz
 cp $WORK_DIR/vmlinuz smi/base.part/vmlinuz
 
 mkdir -p $WORK_DIR/smi
-( cd ./smi/base.part && tar --owner=root --group=root -cf - --use-compress-program=xz .) > $WORK_DIR/smi/base.part.tar.xz
+( cd ./smi/base.part && tar -p --owner=root --group=root -cf - --use-compress-program=xz .) > $WORK_DIR/smi/base.part.tar.xz
 
 mcopy -i ${EFI_IMG} EFI/iso-grubx64.efi.signed ::efi/boot/grubx64.efi
 mcopy -i ${EFI_IMG} shim/shimx64.efi.signed ::efi/boot/bootx64.efi
@@ -234,10 +261,19 @@ configfile (\$prefix)/boot/grub/grub.cfg
 EOF
 
 mcopy -i ${EFI_PART} ${EFI_PART}.grub.cfg ::efi/boot/grub.cfg
-tar --owner=root --group=root -cf - --use-compress-program=xz ${EFI_PART}  > ${EFI_PART}.tar.xz
+tar -p --owner=root --group=root -cf - --use-compress-program=xz ${EFI_PART}  > ${EFI_PART}.tar.xz
 
 ( cd ./smi/smi.img && find . -print0 | cpio --null  --create --verbose --format=newc | gzip --best) > $WORK_DIR/smi.img
 
+cat  <<EOF > ${WORK_DIR}/grub.cfg
+echo SMI Disk Installer
+linux /vmlinuz console=ttyS0,115200 console=tty1
+initrd /initrd.img /smi.img
+boot
+EOF
+
+cp smi/initrd.img $WORK_DIR/initrd.img
+
 #xorriso -as genisoimage -b isolinux/isolinux.bin -c isolinux/boot.cat -isohybrid-mbr /usr/share/syslinux/isohdpfx.bin -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -no-emul-boot -e efi.img -isohybrid-gpt-basdat  -V smi-install-iso -joliet -joliet-long -input-charset 'utf-8' -rock -output b2.iso $WORK_DIR
 
-xorriso -as genisoimage -b isolinux/isolinux.bin -c isolinux/boot.cat -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -no-emul-boot -e efi.img -isohybrid-gpt-basdat  -V smi-install-iso -joliet -joliet-long -input-charset 'utf-8' -rock -output b2.iso $WORK_DIR
+xorriso -as genisoimage -b isolinux/isolinux.bin -c isolinux/boot.cat -isohybrid-mbr $ISOHDPFX_BIN -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -no-emul-boot -e efi.img -isohybrid-gpt-basdat  -V smi-install-iso -joliet -joliet-long -input-charset 'utf-8' -rock -output b2.iso $WORK_DIR
