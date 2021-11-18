@@ -25,8 +25,19 @@ else
 fi
 
 GRUB_MODDEP_LST=/usr/lib/grub/x86_64-efi/moddep.lst
+PESIGN=/usr/bin/pesign
+MAKE=/usr/bin/make
+GCC=/usr/bin/gcc
+GPP=/usr/bin/g++
+NASM=/usr/bin/nasm
+GENISOIMAGE=/usr/bin/genisoimage
+UUID_H=/usr/include/uuid/uuid.h
+IASL=/usr/bin/iasl
+XORRISO=/usr/bin/xorriso
+PYTHON3=/usr/bin/python3
+OSSLSIGNCODE=/usr/bin/osslsigncode
 
-for f in "$ISOLINUX_BIN" "$LDLINUX_C32" "$GRUB_MKIMAGE" "$GRUB_MODDEP_LST" ; do
+for f in "$ISOLINUX_BIN" "$LDLINUX_C32" "$GRUB_MKIMAGE" "$GRUB_MODDEP_LST" "$PESIGN" "$MAKE" "$GCC" "$GPP" "$NASM" "$GENISOIMAGE" "$UUID_H" "$IASL" "$XORRISO" "$KVM" "$PYTHON3" "$OSSLSIGNCODE" ; do
 	if [ ! -f "$f" ] ; then
 		echo "Missing $f" && exit 1
 	fi
@@ -135,7 +146,7 @@ popd
 
 # Generate OVMF variables ("VARS") file with default Secure Boot keys enrolled
 rm -f OVMF_VARS.secboot.fd
-qemu-ovmf-secureboot/ovmf-vars-generator --verbose --verbose --qemu-binary $KVM --ovmf-binary edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_CODE.fd --ovmf-template-vars edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_VARS.fd --uefi-shell-iso edk2/UefiShell.iso --oem-string "$(< PkKek1.oemstr)" --skip-testing OVMF_VARS.secboot.fd
+/usr/bin/python3 qemu-ovmf-secureboot/ovmf-vars-generator --verbose --verbose --qemu-binary $KVM --ovmf-binary edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_CODE.fd --ovmf-template-vars edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_VARS.fd --uefi-shell-iso edk2/UefiShell.iso --oem-string "$(< PkKek1.oemstr)" --skip-testing OVMF_VARS.secboot.fd
 
 
 # Create Secure boot signer ca
@@ -178,7 +189,7 @@ sed -i '/efi_status = handle_sba/a efi_status = EFI_SUCCESS;' pe.c
 make clean
 make VENDOR_CERT_FILE=../xiaoxin-ca.cer ENABLE_SHIM_CERT=1
 
-osslsigncode sign -in shimx64.efi -certs ../certs/Uefi.crt -key ../certs/Uefi.key -out shimx64.efi.signed
+$OSSLSIGNCODE sign -in shimx64.efi -certs ../certs/Uefi.crt -key ../certs/Uefi.key -out shimx64.efi.signed
 
 popd
 
