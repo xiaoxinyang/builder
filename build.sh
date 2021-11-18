@@ -45,16 +45,17 @@ done
 
 git submodule update --init
 
-IDX=1002
+IDX=1003
 
 # Create certificates
 pushd certs
 
-for f in kek.cnf  pca.cnf  root.cnf  uefi.cnf ; do
+for f in kek.cnf  pca.cnf  root.cnf  uefi.cnf pkkek1.cnf ; do
    sed "s,XXX,$IDX," template/$f > $f 
 done
 
 openssl req -config ./root.cnf -new -x509 -newkey rsa:2048 -nodes -days 36500 -outform PEM -keyout Root.key -out Root.crt
+openssl req -config ./pkkek1.cnf -new -x509 -newkey rsa:2048 -nodes -days 36500 -outform PEM -keyout PkKek1.key -out PkKek1.crt
 
 openssl req -config ./uefi.cnf -nodes  -days 36500 -newkey rsa:2048 -keyout Uefi.key -out Uefi.csr
 openssl x509 -req -in Uefi.csr -CA Root.crt -CAkey Root.key -CAcreateserial -out Uefi.crt
@@ -145,6 +146,11 @@ genisoimage -input-charset ASCII -J -rational-rock -efi-boot uefi_shell.img -no-
 popd
 
 # Generate OVMF variables ("VARS") file with default Secure Boot keys enrolled
+sed \
+    -e 's/^-----BEGIN CERTIFICATE-----$/4e32566d-8e9e-4f52-81d3-5bb9715f9727:/' \
+    -e '/^-----END CERTIFICATE-----$/d' \
+    certs/PkKek1.crt > PkKek1.oemstr
+
 rm -f OVMF_VARS.secboot.fd
 /usr/bin/python3 qemu-ovmf-secureboot/ovmf-vars-generator --verbose --verbose --qemu-binary $KVM --ovmf-binary edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_CODE.fd --ovmf-template-vars edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_VARS.fd --uefi-shell-iso edk2/UefiShell.iso --oem-string "$(< PkKek1.oemstr)" --skip-testing OVMF_VARS.secboot.fd
 
