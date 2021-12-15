@@ -1,83 +1,74 @@
 #!/bin/bash
 
-cat /etc/os-release | grep -q '"Ubuntu"'
+create_gpg_key() {
+	rm -rf ./gnupg
+	mkdir -p ./gnupg
+	gpg --homedir ./gnupg --batch --passphrase '' --quick-gen-key TEST_USER_ID default default
+	rm ./test_user_id.key
+        gpg --homedir ./gnupg --output ./test_user_id.key --export
+	cp ./test_user_id.key smi/base.part/
+}
 
-if [ $? -eq 0 ] ; then
-	# Ubuntu
-	KVM=/usr/bin/kvm
-	ISOLINUX_BIN=/usr/lib/ISOLINUX/isolinux.bin
-	LDLINUX_C32=/usr/lib/syslinux/modules/bios/ldlinux.c32
-	GRUB_MKIMAGE=/usr/bin/grub-mkimage
-    	GRUB_MODULES_ISO="iso9660 normal boot linux multiboot true configfile loopback chain efifwsetup efi_gop efi_uga ls cat echo ls memdisk udf linuxefi"
-    	GRUB_MODULES="fat iso9660 part_gpt part_msdos normal boot linux configfile loopback chain efifwsetup efi_gop efi_uga ls search search_label search_fs_uuid search_fs_file test all_video loadenv exfat ext2 udf linuxefi"
-	EFIKEYGEN="efikeygen"
-	ISOHDPFX_BIN=/usr/lib/ISOLINUX/isohdpfx.bin
-else
-	# CentOS
-	KVM=/usr/libexec/qemu-kvm
-	ISOLINUX_BIN=/usr/share/syslinux/isolinux.bin
-	LDLINUX_C32=/usr/share/syslinux/ldlinux.c32
-	GRUB_MKIMAGE=/usr/bin/grub2-mkimage
-    	GRUB_MODULES_ISO="iso9660 normal boot linux multiboot true configfile loopback chain efifwsetup efi_gop efi_uga ls cat echo ls memdisk udf linux"
-    	GRUB_MODULES="fat iso9660 part_gpt part_msdos normal boot linux configfile loopback chain efifwsetup efi_gop efi_uga ls search search_label search_fs_uuid search_fs_file test all_video loadenv exfat ext2 udf linux"
-	EFIKEYGEN="efikeygen --kernel"
-	ISOHDPFX_BIN=/usr/share/syslinux/isohdpfx.bin
-fi
+create_certificates() {
+    pushd certs
+    
+    for f in kek.cnf  pca.cnf  root.cnf  uefi.cnf pkkek1.cnf ; do
+       sed "s,XXX,$IDX," template/$f > $f 
+    done
+    
+    openssl req -config ./root.cnf -new -x509 -newkey rsa:2048 -nodes -days 36500 -outform PEM -keyout Root.key -out Root.crt
+    openssl req -config ./pkkek1.cnf -new -x509 -newkey rsa:2048 -nodes -days 36500 -outform PEM -keyout PkKek1.key -out PkKek1.crt
+    
+    openssl req -config ./uefi.cnf -nodes  -days 36500 -newkey rsa:2048 -keyout Uefi.key -out Uefi.csr
+    openssl x509 -req -in Uefi.csr -CA Root.crt -CAkey Root.key -CAcreateserial -out Uefi.crt
+    openssl x509 -inform PEM -in Uefi.crt -outform DER -out Uefi.cer
+    
+    openssl req -config ./pca.cnf -nodes  -days 36500 -newkey rsa:2048 -keyout Pca.key -out Pca.csr
+    openssl x509 -req -in Pca.csr -CA Root.crt -CAkey Root.key -CAcreateserial -out Pca.crt
+    openssl x509 -inform PEM -in Pca.crt -outform DER -out Pca.cer
+    
+    openssl req -config ./kek.cnf -nodes  -days 36500 -newkey rsa:2048 -keyout Kek.key -out Kek.csr
+    openssl x509 -req -in Kek.csr -CA Root.crt -CAkey Root.key -CAcreateserial -out Kek.crt
+    openssl x509 -inform PEM -in Kek.crt -outform DER -out Kek.cer
+    
+    popd
+}
 
-GRUB_MODDEP_LST=/usr/lib/grub/x86_64-efi/moddep.lst
-PESIGN=/usr/bin/pesign
-MAKE=/usr/bin/make
-GCC=/usr/bin/gcc
-GPP=/usr/bin/g++
-NASM=/usr/bin/nasm
-GENISOIMAGE=/usr/bin/genisoimage
-UUID_H=/usr/include/uuid/uuid.h
-IASL=/usr/bin/iasl
-XORRISO=/usr/bin/xorriso
-PYTHON3=/usr/bin/python3
-OSSLSIGNCODE=/usr/bin/osslsigncode
+create_singer_ca() {
+    rm -rf ./ca
+    mkdir -p ./ca/uefi_sb_ca
+     
+    certutil -d ./ca/uefi_sb_ca -N --empty-password
+     
+    $EFIKEYGEN -d ./ca/uefi_sb_ca \
+      --ca --self-sign \
+      --nickname='Xiaoxin UEFI SB CA' \
+      --common-name="C=CA,ST=Quebec,L=Montreal,O=Xiaoxin,CN=Xiaoxin UEFI SB CA $IDX" \
+      --serial=00
+     
+    $EFIKEYGEN -d ./ca/uefi_sb_ca \
+      --signer='Xiaoxin UEFI SB CA' \
+      --nickname='Xiaoxin UEFI SB Signer' \
+      --common-name="C=CA,ST=Quebec,L=Montreal,O=Xiaoxin,CN=Xiaoxin UEFI SB Signer $IDX" \
+      --serial=01
+     
+    pk12util -d ./ca/uefi_sb_ca -o signer.p12 -n 'Xiaoxin UEFI SB Signer' -W 1234
+     
+    mkdir -p ./ca/uefi_sb_signer
+    certutil -d ./ca/uefi_sb_signer -N --empty-password
+    pk12util -d ./ca/uefi_sb_signer -i signer.p12 -W 1234
+    shred signer.p12
+    
+    # xiaoxin-ca.cer will be used as vendoer certificate in shim
+    certutil -d ./ca/uefi_sb_ca -L -n "Xiaoxin UEFI SB CA" -r > xiaoxin-ca.cer
+}
 
-for f in "$ISOLINUX_BIN" "$LDLINUX_C32" "$GRUB_MKIMAGE" "$GRUB_MODDEP_LST" "$PESIGN" "$MAKE" "$GCC" "$GPP" "$NASM" "$GENISOIMAGE" "$UUID_H" "$IASL" "$XORRISO" "$KVM" "$PYTHON3" "$OSSLSIGNCODE" ; do
-	if [ ! -f "$f" ] ; then
-		echo "Missing $f" && exit 1
-	fi
-done
+build_edk () {
+    pushd edk2 
+    git submodule update --init
 
-git submodule update --init
-
-IDX=1003
-
-# Create certificates
-pushd certs
-
-for f in kek.cnf  pca.cnf  root.cnf  uefi.cnf pkkek1.cnf ; do
-   sed "s,XXX,$IDX," template/$f > $f 
-done
-
-openssl req -config ./root.cnf -new -x509 -newkey rsa:2048 -nodes -days 36500 -outform PEM -keyout Root.key -out Root.crt
-openssl req -config ./pkkek1.cnf -new -x509 -newkey rsa:2048 -nodes -days 36500 -outform PEM -keyout PkKek1.key -out PkKek1.crt
-
-openssl req -config ./uefi.cnf -nodes  -days 36500 -newkey rsa:2048 -keyout Uefi.key -out Uefi.csr
-openssl x509 -req -in Uefi.csr -CA Root.crt -CAkey Root.key -CAcreateserial -out Uefi.crt
-openssl x509 -inform PEM -in Uefi.crt -outform DER -out Uefi.cer
-
-openssl req -config ./pca.cnf -nodes  -days 36500 -newkey rsa:2048 -keyout Pca.key -out Pca.csr
-openssl x509 -req -in Pca.csr -CA Root.crt -CAkey Root.key -CAcreateserial -out Pca.crt
-openssl x509 -inform PEM -in Pca.crt -outform DER -out Pca.cer
-
-openssl req -config ./kek.cnf -nodes  -days 36500 -newkey rsa:2048 -keyout Kek.key -out Kek.csr
-openssl x509 -req -in Kek.csr -CA Root.crt -CAkey Root.key -CAcreateserial -out Kek.crt
-openssl x509 -inform PEM -in Kek.crt -outform DER -out Kek.cer
-
-popd
-
-
-# Build EDK
-pushd edk2 
-git submodule update --init
-
-rm -rf Build/
-# Replace AuthData.c
+    rm -rf Build/
+    # Replace AuthData.c
 cat  <<EOF > ./OvmfPkg/EnrollDefaultKeys/AuthData.c
 #include "EnrollDefaultKeys.h"
 
@@ -116,118 +107,165 @@ CONST UINTN mSizeOfSha256OfDevNull = sizeof mSha256OfDevNull;
 
 EOF
 
-# Do not attempt to build BrotliCompress
-sed -i '/BrotliCompress/d' BaseTools/Source/C/GNUmakefile
+    # Do not attempt to build BrotliCompress
+    sed -i '/BrotliCompress/d' BaseTools/Source/C/GNUmakefile
 
-export PYTHON_COMMAND=/usr/bin/python3
-. edksetup.sh
-make -C BaseTools/
+    export PYTHON_COMMAND=/usr/bin/python3
+    . edksetup.sh
+    make -C BaseTools/
 
-# Remove BrotliCustomDecompressLib
-cp MdeModulePkg/MdeModulePkg.dec MdeModulePkg/MdeModulePkg.dec.orig
-tac MdeModulePkg/MdeModulePkg.dec.orig | sed '/BrotliCustomDecompressLib/I,+1 d' | tac > MdeModulePkg/MdeModulePkg.dec
+    # Remove BrotliCustomDecompressLib
+    cp MdeModulePkg/MdeModulePkg.dec MdeModulePkg/MdeModulePkg.dec.orig
+    tac MdeModulePkg/MdeModulePkg.dec.orig | sed '/BrotliCustomDecompressLib/I,+1 d' | tac > MdeModulePkg/MdeModulePkg.dec
 
-#build -n 40 --cmd-len=65536 -t GCC5 -b DEBUG --hash -D NETWORK_IP6_ENABLE -D NETWORK_HTTP_BOOT_ENABLE -D NETWORK_TLS_ENABLE -D TPM_ENABLE -D FD_SIZE_4MB -a X64 -D PVSCSI_ENABLE=FALSE -D MPT_SCSI_ENABLE=FALSE -p OvmfPkg/OvmfPkgX64.dsc
+    #build -n 40 --cmd-len=65536 -t GCC5 -b DEBUG --hash -D NETWORK_IP6_ENABLE -D NETWORK_HTTP_BOOT_ENABLE -D NETWORK_TLS_ENABLE -D TPM_ENABLE -D FD_SIZE_4MB -a X64 -D PVSCSI_ENABLE=FALSE -D MPT_SCSI_ENABLE=FALSE -p OvmfPkg/OvmfPkgX64.dsc
 
-build -D SECURE_BOOT_ENABLE -D EXCLUDE_SHELL_FROM_FD -n 40 --cmd-len=65536 -t GCC5 -b DEBUG --hash -D NETWORK_IP6_ENABLE -D NETWORK_HTTP_BOOT_ENABLE -D NETWORK_TLS_ENABLE -a IA32 -a X64 -p OvmfPkg/OvmfPkgIa32X64.dsc -D SMM_REQUIRE -D PVSCSI_ENABLE=FALSE -D MPT_SCSI_ENABLE=FALSE -D TPM_ENABLE -D FD_SIZE_4MB
+    build -D SECURE_BOOT_ENABLE -D EXCLUDE_SHELL_FROM_FD -n 40 --cmd-len=65536 -t GCC5 -b DEBUG --hash -D NETWORK_IP6_ENABLE -D NETWORK_HTTP_BOOT_ENABLE -D NETWORK_TLS_ENABLE -a IA32 -a X64 -p OvmfPkg/OvmfPkgIa32X64.dsc -D SMM_REQUIRE -D PVSCSI_ENABLE=FALSE -D MPT_SCSI_ENABLE=FALSE -D TPM_ENABLE -D FD_SIZE_4MB
 
-export MTOOLS_SKIP_CHECK=1
-rm -f uefi_shell.img
-mkdosfs -C uefi_shell.img -n UEFI_SHELL -- 2167
-mmd -i uefi_shell.img ::efi
-mmd -i uefi_shell.img ::efi/boot
-mcopy -i uefi_shell.img Build/Ovmf3264/DEBUG_GCC5/X64/Shell.efi ::efi/boot/bootx64.efi
-mcopy -i uefi_shell.img Build/Ovmf3264/DEBUG_GCC5/X64/EnrollDefaultKeys.efi ::/EnrollDefaultKeys.efi
+    export MTOOLS_SKIP_CHECK=1
+    rm -f uefi_shell.img
+    $MKDOSFS -C uefi_shell.img -n UEFI_SHELL -- 2167
+    mmd -i uefi_shell.img ::efi
+    mmd -i uefi_shell.img ::efi/boot
+    mcopy -i uefi_shell.img Build/Ovmf3264/DEBUG_GCC5/X64/Shell.efi ::efi/boot/bootx64.efi
+    mcopy -i uefi_shell.img Build/Ovmf3264/DEBUG_GCC5/X64/EnrollDefaultKeys.efi ::/EnrollDefaultKeys.efi
 
-mdir -i uefi_shell.img -/ ::
+    mdir -i uefi_shell.img -/ ::
 
-genisoimage -input-charset ASCII -J -rational-rock -efi-boot uefi_shell.img -no-emul-boot -o UefiShell.iso -- uefi_shell.img
+    genisoimage -input-charset ASCII -J -rational-rock -efi-boot uefi_shell.img -no-emul-boot -o UefiShell.iso -- uefi_shell.img
 
-popd
+    popd
 
-# Generate OVMF variables ("VARS") file with default Secure Boot keys enrolled
-sed \
-    -e 's/^-----BEGIN CERTIFICATE-----$/4e32566d-8e9e-4f52-81d3-5bb9715f9727:/' \
-    -e '/^-----END CERTIFICATE-----$/d' \
-    certs/PkKek1.crt > PkKek1.oemstr
+    # Generate OVMF variables ("VARS") file with default Secure Boot keys enrolled
+    sed \
+        -e 's/^-----BEGIN CERTIFICATE-----$/4e32566d-8e9e-4f52-81d3-5bb9715f9727:/' \
+        -e '/^-----END CERTIFICATE-----$/d' \
+        certs/PkKek1.crt > PkKek1.oemstr
 
-rm -f OVMF_VARS.secboot.fd
-/usr/bin/python3 qemu-ovmf-secureboot/ovmf-vars-generator --verbose --verbose --qemu-binary $KVM --ovmf-binary edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_CODE.fd --ovmf-template-vars edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_VARS.fd --uefi-shell-iso edk2/UefiShell.iso --oem-string "$(< PkKek1.oemstr)" --skip-testing OVMF_VARS.secboot.fd
+    rm -f OVMF_VARS.secboot.fd
+    /usr/bin/python3 qemu-ovmf-secureboot/ovmf-vars-generator --verbose --verbose --qemu-binary $KVM --ovmf-binary edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_CODE.fd --ovmf-template-vars edk2/Build/Ovmf3264/DEBUG_GCC5/FV/OVMF_VARS.fd --uefi-shell-iso edk2/UefiShell.iso --oem-string "$(< PkKek1.oemstr)" --skip-testing OVMF_VARS.secboot.fd
+}
 
+build_shim() {
+    pushd shim
+    git submodule update --init
 
-# Create Secure boot signer ca
-rm -rf ./ca
-mkdir -p ./ca/uefi_sb_ca
- 
-certutil -d ./ca/uefi_sb_ca -N --empty-password
- 
-$EFIKEYGEN -d ./ca/uefi_sb_ca \
-  --ca --self-sign \
-  --nickname='Xiaoxin UEFI SB CA' \
-  --common-name="C=CA,ST=Quebec,L=Montreal,O=Xiaoxin,CN=Xiaoxin UEFI SB CA $IDX" \
-  --serial=00
- 
-$EFIKEYGEN -d ./ca/uefi_sb_ca \
-  --signer='Xiaoxin UEFI SB CA' \
-  --nickname='Xiaoxin UEFI SB Signer' \
-  --common-name="C=CA,ST=Quebec,L=Montreal,O=Xiaoxin,CN=Xiaoxin UEFI SB Signer $IDX" \
-  --serial=01
- 
-pk12util -d ./ca/uefi_sb_ca -o signer.p12 -n 'Xiaoxin UEFI SB Signer' -W 1234
- 
-mkdir -p ./ca/uefi_sb_signer
-certutil -d ./ca/uefi_sb_signer -N --empty-password
-pk12util -d ./ca/uefi_sb_signer -i signer.p12 -W 1234
-shred signer.p12
+    # enable verbose
+    sed -i 's,UINT32 verbose = 0,UINT32 verbose = 1,' globals.c 
 
-# xiaoxin-ca.cer will be used as vendoer certificate in shim
-certutil -d ./ca/uefi_sb_ca -L -n "Xiaoxin UEFI SB CA" -r > xiaoxin-ca.cer
+    # comment out sbat checking in pe.c(grub in Ubuntu 18 doesn't support sbat)
+    sed -i '/efi_status = handle_sba/a efi_status = EFI_SUCCESS;' pe.c
+    make clean
+    make VENDOR_CERT_FILE=../xiaoxin-ca.cer ENABLE_SHIM_CERT=1
 
-# Build shim
-pushd shim
-git submodule update --init
+    $OSSLSIGNCODE sign -in shimx64.efi -certs ../certs/Uefi.crt -key ../certs/Uefi.key -out shimx64.efi.signed
+    #XXX $OSSLSIGNCODE sign -in /home/admin/test/main.efi -certs ../certs/Uefi.crt -key ../certs/Uefi.key -out shimx64.efi.signed
 
-# enable verbose
-sed -i 's,UINT32 verbose = 0,UINT32 verbose = 1,' globals.c 
+    popd
+}
 
-# comment out sbat checking in pe.c(grub in Ubuntu 18 doesn't support sbat)
-sed -i '/efi_status = handle_sba/a efi_status = EFI_SUCCESS;' pe.c
-make clean
-make VENDOR_CERT_FILE=../xiaoxin-ca.cer ENABLE_SHIM_CERT=1
+build_grub() {
+    rm -rf EFI
+    mkdir EFI
 
-$OSSLSIGNCODE sign -in shimx64.efi -certs ../certs/Uefi.crt -key ../certs/Uefi.key -out shimx64.efi.signed
+    # with --pukey to enable check_signature in grub
+    GRUB_MKIMAGE="$GRUB_MKIMAGE --pubkey=./test_user_id.key"
+    # for hard drive
+    $GRUB_MKIMAGE \
+        --compression=xz \
+        --directory $GRUB_DIR \
+        --output EFI/grubx64.efi \
+        --prefix /EFI/BOOT \
+        --format x86_64-efi \
+        $GRUB_MODULES
 
-popd
-
-# Build grubx64
-rm -rf EFI
-mkdir EFI
-# for hard drive
-$GRUB_MKIMAGE \
-    --compression=xz \
-    --directory /usr/lib/grub/x86_64-efi \
-    --output EFI/grubx64.efi \
-    --prefix /EFI/BOOT \
-    --format x86_64-efi \
-    $GRUB_MODULES
-
-# for iso
+    # for iso
 cat  <<EOF >> ./grub-early.cfg
 configfile (\$root)/grub.cfg
 EOF
 
-$GRUB_MKIMAGE \
-    -c ./grub-early.cfg \
-    --compression=xz \
-    --directory /usr/lib/grub/x86_64-efi \
-    --output EFI/iso-grubx64.efi \
-    --prefix /EFI/BOOT \
-    --format x86_64-efi \
-    $GRUB_MODULES_ISO
+    $GRUB_MKIMAGE \
+        -c ./grub-early.cfg \
+        --compression=xz \
+        --directory $GRUB_DIR \
+        --output EFI/iso-grubx64.efi \
+        --prefix /EFI/BOOT \
+        --format x86_64-efi \
+        $GRUB_MODULES_ISO
 
-# sign 
-pesign --force -s -n ./ca/uefi_sb_signer -c "Xiaoxin UEFI SB Signer" -i EFI/grubx64.efi -o EFI/grubx64.efi.signed
-pesign --force -s -n ./ca/uefi_sb_signer -c "Xiaoxin UEFI SB Signer" -i EFI/iso-grubx64.efi -o EFI/iso-grubx64.efi.signed
+    # sign 
+    pesign --force -s -n ./ca/uefi_sb_signer -c "Xiaoxin UEFI SB Signer" -i EFI/grubx64.efi -o EFI/grubx64.efi.signed
+    pesign --force -s -n ./ca/uefi_sb_signer -c "Xiaoxin UEFI SB Signer" -i EFI/iso-grubx64.efi -o EFI/iso-grubx64.efi.signed
+}
+
+cat /etc/os-release | grep -q '"Ubuntu"'
+
+if [ $? -eq 0 ] ; then
+	# Ubuntu
+	KVM=/usr/bin/kvm
+	ISOLINUX_BIN=/usr/lib/ISOLINUX/isolinux.bin
+	LDLINUX_C32=/usr/lib/syslinux/modules/bios/ldlinux.c32
+	GRUB_MKIMAGE=/usr/bin/grub-mkimage
+    	GRUB_MODULES_ISO="iso9660 normal boot linux multiboot true configfile loopback chain efifwsetup efi_gop efi_uga ls cat echo ls memdisk udf linuxefi"
+    	GRUB_MODULES="fat iso9660 part_gpt part_msdos normal boot linux configfile loopback chain efifwsetup efi_gop efi_uga ls search search_label search_fs_uuid search_fs_file test all_video loadenv exfat ext2 udf linuxefi pgp gcry_sha256 gcry_sha512 gcry_dsa gcry_rsa"
+	EFIKEYGEN="efikeygen"
+	ISOHDPFX_BIN=/usr/lib/ISOLINUX/isohdpfx.bin
+else
+	# CentOS
+	KVM=/usr/libexec/qemu-kvm
+	ISOLINUX_BIN=/usr/share/syslinux/isolinux.bin
+	LDLINUX_C32=/usr/share/syslinux/ldlinux.c32
+	GRUB_MKIMAGE=/usr/bin/grub2-mkimage
+    	GRUB_MODULES_ISO="iso9660 normal boot linux multiboot true configfile loopback chain efifwsetup efi_gop efi_uga ls cat echo ls memdisk udf linux"
+    	GRUB_MODULES="fat iso9660 part_gpt part_msdos normal boot linux configfile loopback chain efifwsetup efi_gop efi_uga ls search search_label search_fs_uuid search_fs_file test all_video loadenv exfat ext2 udf linux pgp gcry_sha256 gcry_sha512 gcry_dsa gcry_rsa"
+	EFIKEYGEN="efikeygen --kernel"
+	ISOHDPFX_BIN=/usr/share/syslinux/isohdpfx.bin
+fi
+
+GRUB_MODDEP_LST=/usr/lib/grub/x86_64-efi/moddep.lst
+GRUB_MODDEP_LST=/usr/local/my-grub/lib/grub/x86_64-efi/moddep.lst
+GRUB_MKIMAGE=/usr/local/my-grub/bin/grub-mkimage
+GRUB_DIR=/usr/local/my-grub/lib/grub/x86_64-efi/
+PESIGN=/usr/bin/pesign
+MAKE=/usr/bin/make
+GCC=/usr/bin/gcc
+GPP=/usr/bin/g++
+NASM=/usr/bin/nasm
+GENISOIMAGE=/usr/bin/genisoimage
+UUID_H=/usr/include/uuid/uuid.h
+IASL=/usr/bin/iasl
+XORRISO=/usr/bin/xorriso
+PYTHON3=/usr/bin/python3
+OSSLSIGNCODE=/usr/bin/osslsigncode
+MKDOSFS=/sbin/mkdosfs
+
+for f in "$ISOLINUX_BIN" "$LDLINUX_C32" "$GRUB_MKIMAGE" "$GRUB_MODDEP_LST" "$PESIGN" "$MAKE" "$GCC" "$GPP" "$NASM" "$GENISOIMAGE" "$UUID_H" "$IASL" "$XORRISO" "$KVM" "$PYTHON3" "$OSSLSIGNCODE" "$MKDOSFS" ; do
+	if [ ! -f "$f" ] ; then
+		echo "Missing $f" && exit 1
+	fi
+done
+
+git submodule update --init
+
+IDX=1006
+
+# Step 1 - gpg
+#create_gpg_key
+
+# Step 2 - Create certificates
+#create_certificates
+
+# Step 3- Build EDK
+# build_edk
+
+# Step 4 - Create Secure boot signer ca
+# create_singer_ca
+
+# Step 5 - Build shim
+# build_shim
+
+# Step 6 - Build grubx64
+build_grub
 
 # create install iso
 WORK_DIR="./work"
@@ -258,8 +296,17 @@ mmd -i ${EFI_IMG} efi/boot
 pesign --force -s -n ./ca/uefi_sb_signer -c "Xiaoxin UEFI SB Signer" -i smi/vmlinuz.unsigned  -o $WORK_DIR/vmlinuz
 cp $WORK_DIR/vmlinuz smi/base.part/vmlinuz
 
+rm $WORK_DIR/vmlinuz.sig
+rm smi/base.part/initrd.img.sig
+
+gpg --homedir ./gnupg --detach-sign $WORK_DIR/vmlinuz 
+gpg --homedir ./gnupg --detach-sign smi/base.part/initrd.img
+
+cp $WORK_DIR/vmlinuz.sig smi/base.part/vmlinuz.sig
+
 mkdir -p $WORK_DIR/smi
-( cd ./smi/base.part && tar -p --owner=root --group=root -cf - --use-compress-program=xz .) > $WORK_DIR/smi/base.part.tar.xz
+#XXX ( cd ./smi/base.part && tar -p --owner=root --group=root -cf - --use-compress-program=xz .) > $WORK_DIR/smi/base.part.tar.xz
+( cd ./smi/base.part && tar -p --owner=root --group=root -cf - .) > $WORK_DIR/smi/base.part.tar.xz
 
 mcopy -i ${EFI_IMG} EFI/iso-grubx64.efi.signed ::efi/boot/grubx64.efi
 mcopy -i ${EFI_IMG} shim/shimx64.efi.signed ::efi/boot/bootx64.efi
@@ -273,6 +320,9 @@ mcopy -i ${EFI_PART} EFI/grubx64.efi.signed ::efi/boot/grubx64.efi
 mcopy -i ${EFI_PART} shim/shimx64.efi.signed ::efi/boot/bootx64.efi
 
 cat  <<EOF > ${EFI_PART}.grub.cfg
+set debug=all
+export debug
+
 search --label cloudimg-rootfs --set prefix
 configfile (\$prefix)/boot/grub/grub.cfg
 EOF
@@ -284,6 +334,8 @@ tar -p --owner=root --group=root -cf - --use-compress-program=xz ${EFI_PART}  > 
 
 cat  <<EOF > ${WORK_DIR}/grub.cfg
 echo SMI Disk Installer
+set debug=all
+
 linux /vmlinuz console=ttyS0,115200 console=tty1
 initrd /initrd.img /smi.img
 boot
