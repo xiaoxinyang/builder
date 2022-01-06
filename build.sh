@@ -165,6 +165,13 @@ build_shim() {
 }
 
 build_grub() {
+    pushd grub2
+    sed -i 's,default_gnulib_url=git://git.sv.gnu.org/gnulib,default_gnulib_url=https://git.savannah.gnu.org/git/gnulib.git,' bootstrap
+    ./bootstrap
+    ./configure --prefix=$PWD/my-grub --with-platform=efi --target=x86_64  --enable-mm-debug=yes
+    make
+    popd
+
     rm -rf EFI
     mkdir EFI
 
@@ -205,9 +212,10 @@ if [ $? -eq 0 ] ; then
 	KVM=/usr/bin/kvm
 	ISOLINUX_BIN=/usr/lib/ISOLINUX/isolinux.bin
 	LDLINUX_C32=/usr/lib/syslinux/modules/bios/ldlinux.c32
-	GRUB_MKIMAGE=/usr/bin/grub-mkimage
     	GRUB_MODULES_ISO="iso9660 normal boot linux multiboot true configfile loopback chain efifwsetup efi_gop efi_uga ls cat echo ls memdisk udf linuxefi"
-    	GRUB_MODULES="fat iso9660 part_gpt part_msdos normal boot linux configfile loopback chain efifwsetup efi_gop efi_uga ls search search_label search_fs_uuid search_fs_file test all_video loadenv exfat ext2 udf linuxefi pgp gcry_sha256 gcry_sha512 gcry_dsa gcry_rsa"
+    	GRUB_MODULES_ISO="iso9660 normal boot linux multiboot true configfile loopback chain efifwsetup efi_gop efi_uga ls cat echo ls memdisk udf linux"
+    	GRUB_MODULES="fat iso9660 part_gpt part_msdos normal boot linux configfile loopback chain efifwsetup efi_gop efi_uga ls search search_label search_fs_uuid search_fs_file test all_video loadenv exfat ext2 udf linuxefi verify gcry_sha256 gcry_sha512 gcry_dsa gcry_rsa"
+    	GRUB_MODULES="fat iso9660 part_gpt part_msdos normal boot linux configfile loopback chain efifwsetup efi_gop efi_uga ls search search_label search_fs_uuid search_fs_file test all_video loadenv exfat ext2 udf linux verify gcry_sha256 gcry_sha512 gcry_dsa gcry_rsa"
 	EFIKEYGEN="efikeygen"
 	ISOHDPFX_BIN=/usr/lib/ISOLINUX/isohdpfx.bin
 else
@@ -215,17 +223,15 @@ else
 	KVM=/usr/libexec/qemu-kvm
 	ISOLINUX_BIN=/usr/share/syslinux/isolinux.bin
 	LDLINUX_C32=/usr/share/syslinux/ldlinux.c32
-	GRUB_MKIMAGE=/usr/bin/grub2-mkimage
     	GRUB_MODULES_ISO="iso9660 normal boot linux multiboot true configfile loopback chain efifwsetup efi_gop efi_uga ls cat echo ls memdisk udf linux"
+    	GRUB_MODULES="fat iso9660 part_gpt part_msdos normal boot linux configfile loopback chain efifwsetup efi_gop efi_uga ls search search_label search_fs_uuid search_fs_file test all_video loadenv exfat ext2 udf linux verify gcry_sha256 gcry_sha512 gcry_dsa gcry_rsa"
     	GRUB_MODULES="fat iso9660 part_gpt part_msdos normal boot linux configfile loopback chain efifwsetup efi_gop efi_uga ls search search_label search_fs_uuid search_fs_file test all_video loadenv exfat ext2 udf linux pgp gcry_sha256 gcry_sha512 gcry_dsa gcry_rsa"
 	EFIKEYGEN="efikeygen --kernel"
 	ISOHDPFX_BIN=/usr/share/syslinux/isohdpfx.bin
 fi
 
-GRUB_MODDEP_LST=/usr/lib/grub/x86_64-efi/moddep.lst
-GRUB_MODDEP_LST=/usr/local/my-grub/lib/grub/x86_64-efi/moddep.lst
-GRUB_MKIMAGE=/usr/local/my-grub/bin/grub-mkimage
-GRUB_DIR=/usr/local/my-grub/lib/grub/x86_64-efi/
+GRUB_MKIMAGE=/home/admin/builder/grub2/my-grub/bin/grub-mkimage
+GRUB_DIR=/home/admin/builder/grub2/my-grub/lib/grub/x86_64-efi/
 PESIGN=/usr/bin/pesign
 MAKE=/usr/bin/make
 GCC=/usr/bin/gcc
@@ -239,7 +245,7 @@ PYTHON3=/usr/bin/python3
 OSSLSIGNCODE=/usr/bin/osslsigncode
 MKDOSFS=/sbin/mkdosfs
 
-for f in "$ISOLINUX_BIN" "$LDLINUX_C32" "$GRUB_MKIMAGE" "$GRUB_MODDEP_LST" "$PESIGN" "$MAKE" "$GCC" "$GPP" "$NASM" "$GENISOIMAGE" "$UUID_H" "$IASL" "$XORRISO" "$KVM" "$PYTHON3" "$OSSLSIGNCODE" "$MKDOSFS" ; do
+for f in "$ISOLINUX_BIN" "$LDLINUX_C32" "$GRUB_MKIMAGE" "$PESIGN" "$MAKE" "$GCC" "$GPP" "$NASM" "$GENISOIMAGE" "$UUID_H" "$IASL" "$XORRISO" "$KVM" "$PYTHON3" "$OSSLSIGNCODE" "$MKDOSFS" ; do
 	if [ ! -f "$f" ] ; then
 		echo "Missing $f" && exit 1
 	fi
@@ -296,13 +302,16 @@ mmd -i ${EFI_IMG} efi/boot
 pesign --force -s -n ./ca/uefi_sb_signer -c "Xiaoxin UEFI SB Signer" -i smi/vmlinuz.unsigned  -o $WORK_DIR/vmlinuz
 cp $WORK_DIR/vmlinuz smi/base.part/vmlinuz
 
-rm $WORK_DIR/vmlinuz.sig
-rm smi/base.part/initrd.img.sig
+rm $WORK_DIR/vmlinuz.sig smi/base.part/vmlinuz.sig
+rm $WORK_DIR/initrd.img.sig smi/base.part/initrd.img.sig
+rm smi/base.part/boot/grub/grub.cfg.sig
 
 gpg --homedir ./gnupg --detach-sign $WORK_DIR/vmlinuz 
 gpg --homedir ./gnupg --detach-sign smi/base.part/initrd.img
+gpg --homedir ./gnupg --detach-sign smi/base.part/boot/grub/grub.cfg
 
 cp $WORK_DIR/vmlinuz.sig smi/base.part/vmlinuz.sig
+#(not needed?) cp smi/base.part/initrd.img.sig $WORK_DIR/
 
 mkdir -p $WORK_DIR/smi
 #XXX ( cd ./smi/base.part && tar -p --owner=root --group=root -cf - --use-compress-program=xz .) > $WORK_DIR/smi/base.part.tar.xz
@@ -327,10 +336,16 @@ search --label cloudimg-rootfs --set prefix
 configfile (\$prefix)/boot/grub/grub.cfg
 EOF
 
-mcopy -i ${EFI_PART} ${EFI_PART}.grub.cfg ::efi/boot/grub.cfg
+rm -f ${EFI_PART}.grub.cfg.sig
+gpg --homedir ./gnupg --detach-sign ${EFI_PART}.grub.cfg
+mcopy -i ${EFI_PART} ${EFI_PART}.grub.cfg.sig ::efi/boot/grub.cfg.sig
+
+mcopy -i ${EFI_PART} ${EFI_PART}.grub.cfg ::efi/boot/grub.cfg 
 tar -p --owner=root --group=root -cf - --use-compress-program=xz ${EFI_PART}  > ${EFI_PART}.tar.xz
 
 ( cd ./smi/smi.img && find . -print0 | cpio --null  --create --verbose --format=newc | gzip --best) > $WORK_DIR/smi.img
+rm $WORK_DIR/smi.img.sig
+#(not needed?)  gpg --homedir ./gnupg --detach-sign $WORK_DIR/smi.img
 
 cat  <<EOF > ${WORK_DIR}/grub.cfg
 echo SMI Disk Installer

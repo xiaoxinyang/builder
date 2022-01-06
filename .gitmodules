@@ -7,3 +7,6 @@
 [submodule "shim"]
 	path = shim
 	url = https://github.com/rhboot/shim.git
+[submodule "grub2"]
+	path = grub2
+	url = https://github.com/rhboot/grub2.git
