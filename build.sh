@@ -164,13 +164,21 @@ build_shim() {
     popd
 }
 
-build_grub() {
+do_build_grub() {
     pushd grub2
-    sed -i 's,default_gnulib_url=git://git.sv.gnu.org/gnulib,default_gnulib_url=https://git.savannah.gnu.org/git/gnulib.git,' bootstrap
+    git checkout .
+    cat ../grub2.diff | patch -p1
+
     ./bootstrap
     ./configure --prefix=$PWD/my-grub --with-platform=efi --target=x86_64  --enable-mm-debug=yes
+
     make
+    make install
     popd
+}
+
+build_grub() {
+    do_build_grub
 
     rm -rf EFI
     mkdir EFI

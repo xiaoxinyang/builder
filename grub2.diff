@@ -1,0 +1,55 @@
+diff --git a/bootstrap b/bootstrap
+index 5b08e7e2d..031784582 100755
+--- a/bootstrap
++++ b/bootstrap
+@@ -47,7 +47,7 @@ PERL="${PERL-perl}"
+ 
+ me=$0
+ 
+-default_gnulib_url=git://git.sv.gnu.org/gnulib
++default_gnulib_url=https://git.savannah.gnu.org/git/gnulib.git
+ 
+ usage() {
+   cat <<EOF
+diff --git a/grub-core/commands/pgp.c b/grub-core/commands/pgp.c
+index 5daa1e9d0..678899342 100644
+--- a/grub-core/commands/pgp.c
++++ b/grub-core/commands/pgp.c
+@@ -874,7 +874,7 @@ grub_pubkey_init (grub_file_t io, enum grub_file_type type __attribute__ ((unuse
+   grub_err_t err;
+   struct grub_pubkey_context *ctxt;
+ 
+-  if (!sec)
++  if (!sec || !(type & GRUB_FILE_TYPE_ENFORCE_SIGNATURE) )
+     {
+       *flags = GRUB_VERIFY_FLAGS_SKIP_VERIFICATION;
+       return GRUB_ERR_NONE;
+diff --git a/grub-core/loader/linux.c b/grub-core/loader/linux.c
+index 3fe390f17..c67792b4f 100644
+--- a/grub-core/loader/linux.c
++++ b/grub-core/loader/linux.c
+@@ -214,7 +214,7 @@ grub_initrd_init (int argc, char *argv[],
+ 	}
+       initrd_ctx->components[i].file = grub_file_open (fname,
+ 						       GRUB_FILE_TYPE_LINUX_INITRD
+-						       | GRUB_FILE_TYPE_NO_DECOMPRESS);
++						       | GRUB_FILE_TYPE_NO_DECOMPRESS | GRUB_FILE_TYPE_ENFORCE_SIGNATURE);
+       if (!initrd_ctx->components[i].file)
+ 	{
+ 	  grub_initrd_close (initrd_ctx);
+diff --git a/include/grub/file.h b/include/grub/file.h
+index 31567483c..5ac838037 100644
+--- a/include/grub/file.h
++++ b/include/grub/file.h
+@@ -132,7 +132,10 @@ enum grub_file_type
+ 
+     /* --skip-sig is specified.  */
+     GRUB_FILE_TYPE_SKIP_SIGNATURE = 0x10000,
+-    GRUB_FILE_TYPE_NO_DECOMPRESS = 0x20000
++    GRUB_FILE_TYPE_NO_DECOMPRESS = 0x20000,
++
++    /* enfore signature */
++    GRUB_FILE_TYPE_ENFORCE_SIGNATURE = 0x40000,
+   };
+ 
+ /* File description.  */
